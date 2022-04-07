@@ -948,8 +948,8 @@ def flatten(input, axis=1, end_axis=-1):
     Returns:
         A M-D tensor where M = N - (end_axis - axis)
     """
-    input_shape = tf.shape(input)
-    input_rank = tf.shape(input_shape)[0]
+    input_shape = input.shape
+    input_rank = len(input_shape)
     if axis < 0:
         axis = input_rank + axis
     if end_axis < 0:
@@ -957,11 +957,15 @@ def flatten(input, axis=1, end_axis=-1):
     output_shape = []
     if axis != 0:
         output_shape.append(input_shape[:axis])
-    output_shape.append([tf.reduce_prod(input_shape[axis:end_axis + 1])])
+    output_shape.append([np.prod(input_shape[axis:end_axis + 1])])
     if end_axis + 1 != input_rank:
         output_shape.append(input_shape[end_axis + 1:])
-    output_shape = tf.concat(output_shape, axis=0)
+    #print("ops.py before concat: " + str(output_shape))
+    output_shape = np.concatenate(output_shape, axis=0)
+    #print("ops.py before reshape: " + str(output_shape))
     output = tf.reshape(input, output_shape)
+    #print("ops.py final output: " + str(output))
+    #print("ops.py type: " + str(type(output)))
     return output
 
 
