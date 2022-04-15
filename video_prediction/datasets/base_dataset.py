@@ -461,9 +461,10 @@ if __name__ == '__main__':
         datasets.SV2PVideoDataset('data/shape', mode='val'),
         datasets.SV2PVideoDataset('data/humans', mode='val'),
         datasets.SoftmotionVideoDataset('data/bair', mode='val'),
+        datasets.CY101VideoDataset('data/cy101', mode='val'),
         datasets.KTHVideoDataset('data/kth', mode='val'),
         datasets.KTHVideoDataset('data/kth_128', mode='val'),
-        datasets.UCF101VideoDataset('data/ucf101', mode='val'),
+        datasets.UCF101VideoDataset('data/ucf101', mode='val')
     ]
     batch_size = 4
 

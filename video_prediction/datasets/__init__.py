@@ -6,7 +6,7 @@ from .softmotion_dataset import SoftmotionVideoDataset
 from .kth_dataset import KTHVideoDataset
 from .ucf101_dataset import UCF101VideoDataset
 from .cartgripper_dataset import CartgripperVideoDataset
-
+from .cy101_dataset import CY101VideoDataset
 
 def get_dataset_class(dataset):
     dataset_mappings = {
@@ -17,6 +17,7 @@ def get_dataset_class(dataset):
         'kth': 'KTHVideoDataset',
         'ucf101': 'UCF101VideoDataset',
         'cartgripper': 'CartgripperVideoDataset',
+        'cy101': 'CY101VideoDataset'
     }
     dataset_class = dataset_mappings.get(dataset, dataset)
     dataset_class = globals().get(dataset_class)
