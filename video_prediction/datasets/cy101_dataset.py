@@ -2,18 +2,17 @@ import argparse
 import glob
 import itertools
 import os
-import pickle
-import random
 import re
 
 import numpy as np
-import skimage.io
 import tensorflow as tf
+import pandas as pd
 
-from .base_dataset import VideoDataset
+from video_prediction.datasets.base_dataset import VarLenFeatureVideoDataset
+from video_prediction.datasets import cy101_metadata as cy_meta
 
 
-class CY101VideoDataset(VideoDataset):
+class CY101VideoDataset(VarLenFeatureVideoDataset):
     def __init__(self, *args, **kwargs):
         super(CY101VideoDataset, self).__init__(*args, **kwargs)
         self.dataset_name = os.path.basename(os.path.split(self.input_dir)[0])
@@ -35,7 +34,7 @@ class CY101VideoDataset(VideoDataset):
         # extract information from filename to count the number of trajectories in the dataset
         count = 0
         for filename in self.filenames:
-            match = re.search('traj_(\d+)_to_(\d+).tfrecords', os.path.basename(filename))
+            match = re.search('sequence_(\d+)_to_(\d+).tfrecords', os.path.basename(filename))
             start_traj_iter = int(match.group(1))
             end_traj_iter = int(match.group(2))
             count += end_traj_iter - start_traj_iter + 1
@@ -48,40 +47,122 @@ class CY101VideoDataset(VideoDataset):
     def jpeg_encoding(self):
         return True
 
-    crop_stategy = {
-    'crush': [16, -5],
-    'grasp': [0, -10],
-    'lift_slow': [0, -3],
-    'shake': [0, -1],
-    'poke': [2, -5],
-    'push': [2, -5],
-    'tap': [0, -5],
-    'low_drop': [0, -1],
-    'hold': [0, -1],
-}
+
+##############
+# functions from kth_dataset.py for saving tfrecords
+##############
+def _bytes_list_feature(values):
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=values))
+
+def _int64_feature(value):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+def save_tf_record(output_fname, sequences):
+    print('saving sequences to %s' % output_fname)
+    with tf.python_io.TFRecordWriter(output_fname) as writer:
+        for sequence in sequences:
+            num_frames = len(sequence)
+            height, width, channels = sequence[0].shape
+            encoded_sequence = [image.tostring() for image in sequence]
+            features = tf.train.Features(feature={
+                'sequence_length': _int64_feature(num_frames),
+                'height': _int64_feature(height),
+                'width': _int64_feature(width),
+                'channels': _int64_feature(channels),
+                'images/encoded': _bytes_list_feature(encoded_sequence),
+            })
+            example = tf.train.Example(features=features)
+            writer.write(example.SerializeToString())
+
+
+##############
+# creates and returns a pandas dataframe of directories and associated metadata
+#   columns: full_path, object, trial, exec, behavior
+#   rows: one for every folder in the dataset
+##############
+def get_metadata(input_dir):
+
+    ## locate files and validate directory structure
+    all_files = glob.glob(os.sep.join([input_dir, 'vision*', "*", "*", "*", "*"]))
+    if len(all_files) == 0:
+        raise Exception(f"{input_dir} is not a properly formatted raw data " +
+                        "directory for the CY101 dataset.")
+    
+    ## parse metadata from folder names
+    file_df = pd.DataFrame(all_files, columns=["full_path"])
+    path_df = file_df.copy()
+
+    folder_meanings = ["object", "trial", "exec", "behavior"]
+    num_meanings = len(folder_meanings)
+    split_df = file_df.apply(lambda x : pd.Series(x.tolist()[0].split(os.sep)[-num_meanings:], index=folder_meanings), axis=1)
+    
+    file_df = pd.concat([path_df, split_df], axis=1)
+
+    return file_df
+
+'''
 
 
 SEQUENCE_LENGTH = 10
 STEP = 4
 IMG_SIZE = (64, 64)
 
-STRATEGY = 'object' # object | category | trial
-
-        def read_dir(DATA_DIR):
-    visions = glob.glob(os.path.join(DATA_DIR, 'vision*/*/*/*/*'))
-    return visions
 
 
-def convert_audio_to_image(audio_path):
-    ims, duration = plotstft(audio_path)
-    return ims, duration
 
 
+'''
+
+
+# selects relevant files and apportions them into train and test folders
+def partition_data(xval_test_objects, file_metadata):
+
+    all_splits = []
+    drops = []
+    for file_i, file_data in file_metadata.iterrows():
+        
+        split_folders = []
+        for test_objects in xval_test_objects:
+        
+            # validate object and split
+            if file_data["object"] not in cy_meta.OBJECTS:
+                drops.append(file_i)
+                continue
+            elif file_data["object"] in test_objects:
+                split_folders.append("test")
+            else:
+                split_folders.append("train")
+
+        all_splits.append(split_folders)
+
+    # prepare new paths for merge with metadata
+    splits_df = pd.DataFrame(all_splits)
+    num_folds = len(xval_test_objects)
+    splits_df = splits_df.apply(lambda x: pd.Series(x.tolist(), index=range(num_folds)), axis=1)
+
+    # update and return the file_metadata dataframe
+    file_metadata.drop(drops, axis=0, inplace=True)
+    return pd.concat([file_metadata, splits_df], axis=1)
+
+
+# crop sequence length and resize images
 def generate_npy_vision(path, behavior, sequence_length):
     """
     :param path: path to images folder,
     :return: numpy array with size [SUB_SAMPLE_SIZE, SEQ_LENGTH, ...]
     """
+    crop_stategy = {
+        'crush': [16, -5],
+        'grasp': [0, -10],
+        'lift_slow': [0, -3],
+        'shake': [0, -1],
+        'poke': [2, -5],
+        'push': [2, -5],
+        'tap': [0, -5],
+        'low_drop': [0, -1],
+        'hold': [0, -1],
+    }
+
     files = sorted(glob.glob(os.path.join(path, '*.jpg')))
     img_length = len(files)
     files = files[crop_stategy[behavior][0]:crop_stategy[behavior][1]]
@@ -97,128 +178,6 @@ def generate_npy_vision(path, behavior, sequence_length):
     return ret, img_length
 
 
-def generate_npy_haptic(path1, path2, n_frames, behavior, sequence_length):
-    """
-    :param path: path to ttrq0.txt, you need to open it before you process
-    :param n_frames: # frames
-    :return: list of numpy array with size [SEQ_LENGTH, ...]
-    :preprocess protocol: 48 bins for each single frame, given one frame, if #bin is less than 48,
-                            we pad it in the tail with the last bin value. if #bin is more than 48, we take bin[:48]
-    """
-    if not os.path.exists(path1):
-        return None, None
-    haplist1 = open(path1, 'r').readlines()
-    haplist2 = open(path2, 'r').readlines()
-    haplist = [list(map(float, v.strip().split('\t'))) + list(map(float, w.strip().split('\t')))[1:] for v, w in
-               zip(haplist1, haplist2)]
-    haplist = np.array(haplist)
-    time_duration = (haplist[-1][0] - haplist[0][0]) / n_frames
-    bins = np.arange(haplist[0][0], haplist[-1][0], time_duration)
-    end_time = haplist[-1][0]
-    groups = np.digitize(haplist[:, 0], bins, right=False)
-
-    haplist = [haplist[np.where(groups == idx)][..., 1:][:48] for idx in range(1, n_frames + 1)]
-    haplist = [np.pad(ht, [[0, 48 - ht.shape[0]], [0, 0]], mode='edge')[np.newaxis, ...] for ht in haplist]
-    haplist = haplist[crop_stategy[behavior][0]:crop_stategy[behavior][1]]
-    ret = []
-    for i in range(0, len(haplist) - sequence_length, STEP):
-        ret.append(np.concatenate(haplist[i:i + sequence_length], axis=0).astype(np.float32)[:, np.newaxis, ...])
-    return ret, (bins, end_time)
-
-
-def generate_npy_audio(path, n_frames_vision_image, behavior, sequence_length):
-    """
-    :param path: path to audio, you need to open it before you process
-    :return: list of numpy array with size [SEQ_LENGTH, ...]
-    """
-    audio_path = glob.glob(path)
-    if len(audio_path) == 0:
-        return None
-    audio_path = audio_path[0]
-    img, duration = convert_audio_to_image(audio_path)
- # create a new dimension
-
-    image_height, image_width = img.shape
-    image_width = AUDIO_EACH_FRAME_LENGTH * n_frames_vision_image
-    img = PIL.Image.fromarray(img)
-    img = img.resize((image_height, image_width))
-
-    img = np.array(img)
-    img = img[np.newaxis, ...]
-    imglist = []
-    for i in range(0, n_frames_vision_image):
-        imglist.append(img[:, i * AUDIO_EACH_FRAME_LENGTH:(i + 1) * AUDIO_EACH_FRAME_LENGTH, :])
-    imglist = imglist[crop_stategy[behavior][0]:crop_stategy[behavior][1]]
-    ret = []
-    for i in range(0, len(imglist) - sequence_length, STEP):
-        ret.append(np.concatenate(imglist[i:i + sequence_length], axis=0).astype(np.float32)[:, np.newaxis, ...])
-    return ret
-
-
-def generate_npy_vibro(path, n_frames, bins, behavior, sequence_length):
-    """
-    :param path: path to .tsv, you need to open it before you process
-    :return: list of numpy array with size [SEQ_LENGTH, ...]
-    """
-    path = glob.glob(path)
-    if not path and not bins:
-        return None
-    path = path[0]
-    vibro_list = open(path).readlines()
-    vibro_list = [list(map(int, vibro.strip().split('\t'))) for vibro in vibro_list]
-
-    vibro_list = np.array(vibro_list)
-    vibro_time = vibro_list[:, 0]
-    vibro_data = vibro_list[:, 1:]
-    bins, end_time = bins
-    end_time -= bins[0]
-    bins -= bins[0]
-
-    v_h_ratio = vibro_time[-1] / end_time
-    bins = bins * v_h_ratio
-
-    groups = np.digitize(vibro_time, bins, right=False)
-
-    vibro_data = [vibro_data[np.where(groups == idx)] for idx in range(1, n_frames + 1)]
-
-    vibro_data = [np.vstack([np.resize(vibro[:, 0], (128,)),
-                             np.resize(vibro[:, 1], (128,)),
-                             np.resize(vibro[:, 2], (128,))]).T[np.newaxis, ...]
-                  for vibro in vibro_data]
-    # haplist = [np.pad(ht, [[0, 48 - ht.shape[0]], [0, 0]], mode='edge')[np.newaxis, ...] for ht in haplist]
-    vibro_data = vibro_data[crop_stategy[behavior][0]:crop_stategy[behavior][1]]
-
-    ret = []
-    for i in range(0, len(vibro_data) - sequence_length, STEP):
-        ret.append(np.concatenate(vibro_data[i:i + sequence_length], axis=0).astype(np.float32)[:, np.newaxis, ...])
-    return ret
-
-
-# splits words on objects with balanced categories to prepare for
-# 5-fold cross validation
-# assumes objects are in groupings/categories of exactly 5 with unique prefixes
-def split():
-    # test assumptions
-    if len(SORTED_OBJECTS) != 100:
-        raise Exception("split is intended to work for exactly 100 objects")
-
-    # semi-randomly split data
-    splits = [set([]),set([]),set([]),set([]),set([])]
-    # for each of 20 categories of objects
-    for category_i in range(len(SORTED_OBJECTS)//5):
-        low_ind = 5*category_i
-        random_list = np.random.permutation(5)
-
-        # for each of the 5 objects in that category
-        for object_i in range(5):
-            ind = low_ind + random_list[object_i]
-            if SORTED_OBJECTS[ind][0] != SORTED_OBJECTS[low_ind][0]:
-                raise Exception("each grouping must have exactly 5 objects with identical prefix")
-            else:
-                splits[object_i].add(SORTED_OBJECTS[ind])
-
-    return splits
-
 # create vector encoding descriptors of an object
 def switch_words_on(object, descriptor_codes, descriptors_by_object):
     encoded_output = np.zeros(len(descriptor_codes))
@@ -229,72 +188,72 @@ def switch_words_on(object, descriptor_codes, descriptors_by_object):
     return encoded_output
 
 
-def process(visions, chosen_behaviors, OUT_DIR):
-
-    for split_num in range(5):
-        train_subdir = 'train'
-        test_subdir = 'test'
-        # vis_subdir = 'vis'
-        if not os.path.exists(os.path.join(OUT_DIR, str(split_num), train_subdir)):
-            os.makedirs(os.path.join(OUT_DIR, str(split_num), train_subdir))
-
-        if not os.path.exists(os.path.join(OUT_DIR, str(split_num), test_subdir)):
-            os.makedirs(os.path.join(OUT_DIR, str(split_num), test_subdir))
-
-        splits = split()
-
-        fail_count = 0
-        for vision in visions:
-            print("processing " + vision)
-
-            # The path is object/trial/exec/behavior/file_name (visions does not include file names)
-            vision_components = vision.split(os.sep)
-            object_name = vision_components[-4]
-            behavior_name = vision_components[-1]
-
-            # validate behavior
-            if behavior_name not in BEHAVIORS:
-                continue      
-
-            # validate object and split
-            if object_name not in OBJECTS:
-                continue
-            if object_name in splits[split_num]:
-                subdir = test_subdir
-            else:
-                subdir = train_subdir
-            out_sample_dir = os.path.join(OUT_DIR, str(split_num), subdir, '_'.join(vision.split(os.sep)[-4:]))
-
-            haptic1 = os.path.join(re.sub(r'vision_data_part[1-4]', 'rc_data', vision), 'proprioception', 'ttrq0.txt')
-            haptic2 = os.path.join(re.sub(r'vision_data_part[1-4]', 'rc_data', vision), 'proprioception', 'cpos0.txt')
-            audio = os.path.join(re.sub(r'vision_data_part[1-4]', 'rc_data', vision), 'hearing', '*.wav')
-            vibro = os.path.join(re.sub(r'vision_data_part[1-4]', 'rc_data', vision), 'vibro', '*.tsv')
-
-            out_vision_npys, n_frames = generate_npy_vision(vision, behavior_name, SEQUENCE_LENGTH)
-            out_audio_npys = generate_npy_audio(audio, n_frames, behavior_name, SEQUENCE_LENGTH)
-            out_haptic_npys, bins = generate_npy_haptic(haptic1, haptic2, n_frames, behavior_name, SEQUENCE_LENGTH)
-            out_vibro_npys = generate_npy_vibro(vibro, n_frames, bins, behavior_name, SEQUENCE_LENGTH)
-
-            if out_audio_npys is None or out_haptic_npys is None or out_vibro_npys is None:
-                fail_count += 1
-                continue
-            out_behavior_npys = compute_behavior(chosen_behaviors, behavior_name, object_name)
-
-            for i, (out_vision_npy, out_haptic_npy, out_audio_npy, out_vibro_npy) in enumerate(zip(
-                    out_vision_npys, out_haptic_npys, out_audio_npys, out_vibro_npys)):
-                ret = {
-                    'behavior': out_behavior_npys,
-                    'vision': out_vision_npy,
-                    'haptic': out_haptic_npy,
-                    'audio': out_audio_npy,
-                    'vibro': out_vibro_npy
-                }
-                np.save(out_sample_dir + '_' + str(i), ret)
-        print("fail: ", fail_count)
-
 def compute_behavior(CHOSEN_BEHAVIORS, behavior, object):
     out_behavior_npys = np.zeros(len(CHOSEN_BEHAVIORS))
     out_behavior_npys[CHOSEN_BEHAVIORS.index(behavior)] = 1
     descriptors = switch_words_on(object, DESCRIPTOR_CODES, DESCRIPTORS_BY_OBJECT)
     out_behavior_npys = np.hstack([out_behavior_npys, descriptors])
     return out_behavior_npys
+
+
+def copy_data(partitioned_metadata, partition_dir, xval_i, args.image_size):
+    out_vision_npys, n_frames = generate_npy_vision(vision, behavior_name, SEQUENCE_LENGTH)
+
+    out_behavior_npys = compute_behavior(chosen_behaviors, behavior_name, object_name)
+
+
+# processes raw data into tfrecords based on command-line specified args
+def main(args):
+    # process and validate behavior argument
+    if len(args.behavior) == 0:
+        args.behavior = cy_meta.BEHAVIORS
+    else:
+        for name in args.behavior:
+            if name not in cy_meta.BEHAVIORS:
+                raise Exception(f"{name} not a behavior in the cy101 dataset. " +
+                                f"Available behaviors are {cy_meta.BEHAVIORS}")
+
+    # validate data folder and parse metadata
+    print("\nparsing input data directory structure...")
+    file_metadata = get_metadata(args.input_dir)
+    print("done. preview:")
+    print(file_metadata.head())
+
+    # remove undesired behaviors
+    for behavior in cy_meta.BEHAVIORS:
+        if behavior not in args.behavior:
+            file_metadata = file_metadata.drop(file_metadata["action"] == behavior, axis=0)
+    
+    # 5-fold split to prepare for x-val
+    print("\npartitioning files for cross validation...")
+    xval_test_objects = cy_meta.category_split(args.num_folds)
+    partitioned_metadata = partition_data(xval_test_objects, file_metadata)
+    print("done. preview:")
+    print(partitioned_metadata.head())
+
+    # compile data into tfrecords
+    print("\ncopying files to output directory...")
+    for xval_i in range(args.num_folds):
+        for folder in ["train", "test"]:
+            
+            partition_dir = os.path.join(args.output_dir, str(xval_i), folder)
+            if not os.path.exists(partition_dir):
+                os.makedirs(partition_dir)
+            
+            copy_data(partitioned_metadata, partition_dir, xval_i, args.image_size)
+    
+
+if __name__ == '__main__':
+    # specify and parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_dir", type=str, help="directory containing the processed directories "
+                                                    "boxing, handclapping, handwaving, "
+                                                    "jogging, running, walking")
+    parser.add_argument("output_dir", type=str)
+    parser.add_argument("image_size", type=int)
+    parser.add_argument('--behavior', nargs="+", action="append", default=[], help='which behavior?')
+    parser.add_argument('--num_folds', type=int, default=5, help="Number of folds for k-fold cross validation.")
+    args = parser.parse_args()
+
+    # process data into tfrecords
+    main(args)

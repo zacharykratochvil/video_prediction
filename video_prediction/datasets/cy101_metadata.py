@@ -1,10 +1,12 @@
+import numpy as np
+
 # metadata for the cy101 dataset, used by the CY101Dataset class
 
-CATEGORIES = ['basket', 'weight', 'smallstuffedanimal', 'bigstuffedanimal', 'metal', 'timber', 'pasta', 'tin', 'pvc',
+CATEGORIES = set(['basket', 'weight', 'smallstuffedanimal', 'bigstuffedanimal', 'metal', 'timber', 'pasta', 'tin', 'pvc',
               'cup', 'can', 'bottle', 'cannedfood', 'medicine', 'tupperware', 'cone', 'noodle', 'eggcoloringcup', 'egg',
-              'ball']
+              'ball'])
 
-OBJECTS = [
+OBJECTS = set([
     'ball_base', 'can_coke', 'egg_rough_styrofoam', 'noodle_3', 'timber_square', 'ball_basket', 'can_red_bull_large',
     'egg_smooth_styrofoam', 'noodle_4', 'timber_squiggle', 'ball_blue', 'can_red_bull_small', 'egg_wood', 'noodle_5',
     'tin_pokemon',
@@ -31,9 +33,9 @@ OBJECTS = [
     'weight_5', 'bottle_green', 'cup_paper_green', 'metal_thermos', 'smallstuffedanimal_otter', 'bottle_red',
     'cup_yellow', 'timber_pentagon', 'bottle_sobe', 'egg_cardboard', 'noodle_1', 'timber_rectangle', 'can_arizona',
     'egg_plastic_wrap', 'noodle_2', 'timber_semicircle'
-]
+])
 
-SORTED_OBJECTS = sorted(OBJECTS)
+SORTED_OBJECTS = sorted(list(OBJECTS))
 
 DESCRIPTORS_BY_OBJECT = {
     "ball_base":["hard","ball","green","small","round","toy"],
@@ -152,6 +154,40 @@ DESCRIPTOR_CODES = {'aluminum': 0, 'ball': 1, 'basket': 2, 'bear': 3,
     'toy': 60, 'transparent': 61, 'water bottle': 62,
     'white': 63, 'wicker': 64, 'wide': 65, 'wood': 66, 'yellow': 67}
 
-BEHAVIORS = ['crush', 'grasp', 'lift_slow', 'shake', 'poke', 'push', 'tap', 'low_drop', 'hold']
+BEHAVIORS = set(['crush', 'grasp', 'lift_slow', 'shake', 'poke', 'push', 'tap', 'low_drop', 'hold'])
 
 TRIALS = ['exec_1', 'exec_2', 'exec_3', 'exec_4', 'exec_5']
+
+#########
+# category_split
+#   Splits words on objects with balanced categories to prepare for
+#   5-fold cross validation. Assumes objects are in groupings/categories
+#   of exactly 5 with unique prefixes.
+# Returns: list of 5 lists of objects to be placed in the test set,
+#   one list for each of the 5 folds of cross validation
+##########
+def category_split(num_folds=5):
+    ## test assumptions
+    if len(SORTED_OBJECTS) != 100:
+        raise Exception("split is intended to work for exactly 100 objects")
+    
+    assert type(num_folds) == int, "The num_folds argument must be an integer number of splits."
+    if num_folds != 1 and num_folds != 5:
+        raise Exception("only 1 and 5 fold cross validation currently supported")
+
+    ## semi-randomly split data
+    test_objects_by_fold = [set([]) for i in range(num_folds)]
+    # for each of 20 categories, each containing 5 objects
+    for category_i in range(len(SORTED_OBJECTS)//5):
+        low_ind = 5*category_i
+        random_list = np.random.permutation(5)
+
+        # for each of the 5 objects in that category
+        for cross_val_fold_i in range(num_folds):
+            object_i = low_ind + random_list[cross_val_fold_i]
+            if SORTED_OBJECTS[object_i][0] != SORTED_OBJECTS[low_ind][0]:
+                raise Exception("each grouping must have exactly 5 objects with identical prefix")
+            else:
+                test_objects_by_fold[cross_val_fold_i].add(SORTED_OBJECTS[object_i])
+
+    return test_objects_by_fold
