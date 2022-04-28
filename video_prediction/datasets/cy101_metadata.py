@@ -154,7 +154,7 @@ DESCRIPTOR_CODES = {'aluminum': 0, 'ball': 1, 'basket': 2, 'bear': 3,
     'toy': 60, 'transparent': 61, 'water bottle': 62,
     'white': 63, 'wicker': 64, 'wide': 65, 'wood': 66, 'yellow': 67}
 
-BEHAVIORS = set(['crush', 'grasp', 'lift_slow', 'shake', 'poke', 'push', 'tap', 'low_drop', 'hold'])
+BEHAVIORS = ['crush', 'grasp', 'lift_slow', 'shake', 'poke', 'push', 'tap', 'low_drop', 'hold']
 
 TRIALS = ['exec_1', 'exec_2', 'exec_3', 'exec_4', 'exec_5']
 

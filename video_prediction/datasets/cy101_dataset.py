@@ -7,6 +7,7 @@ import re
 import numpy as np
 import tensorflow as tf
 import pandas as pd
+from PIL import Image
 
 from video_prediction.datasets.base_dataset import VarLenFeatureVideoDataset
 from video_prediction.datasets import cy101_metadata as cy_meta
@@ -57,19 +58,25 @@ def _bytes_list_feature(values):
 def _int64_feature(value):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
-def save_tf_record(output_fname, sequences):
+#####
+# takes an output file name, list of sequences of images, and list of actions
+# saves as tfrecord file
+#####
+def save_tf_record(output_fname, sequences, actions):
     print('saving sequences to %s' % output_fname)
     with tf.python_io.TFRecordWriter(output_fname) as writer:
-        for sequence in sequences:
+        for sequence, action in zip(sequences, actions):
             num_frames = len(sequence)
             height, width, channels = sequence[0].shape
-            encoded_sequence = [image.tostring() for image in sequence]
+            encoded_sequence = [bytes(image) for image in sequence]
+            encoded_action = [bytes(action.tostring())]
             features = tf.train.Features(feature={
                 'sequence_length': _int64_feature(num_frames),
                 'height': _int64_feature(height),
                 'width': _int64_feature(width),
                 'channels': _int64_feature(channels),
                 'images/encoded': _bytes_list_feature(encoded_sequence),
+                'action': _bytes_list_feature(encoded_action)
             })
             example = tf.train.Example(features=features)
             writer.write(example.SerializeToString())
@@ -100,22 +107,10 @@ def get_metadata(input_dir):
 
     return file_df
 
-'''
-
-
-SEQUENCE_LENGTH = 10
-STEP = 4
-IMG_SIZE = (64, 64)
-
-
-
-
-
-'''
-
 
 # selects relevant files and apportions them into train and test folders
-def partition_data(xval_test_objects, file_metadata):
+def partition_data(xval_test_objects, file_metadata, chosen_behaviors):
+    chosen_behaviors = set(chosen_behaviors)
 
     all_splits = []
     drops = []
@@ -124,8 +119,11 @@ def partition_data(xval_test_objects, file_metadata):
         split_folders = []
         for test_objects in xval_test_objects:
         
-            # validate object and split
+            # validate object, behavior, then do split
             if file_data["object"] not in cy_meta.OBJECTS:
+                drops.append(file_i)
+                continue
+            elif file_data["behavior"] not in chosen_behaviors:
                 drops.append(file_i)
                 continue
             elif file_data["object"] in test_objects:
@@ -146,11 +144,12 @@ def partition_data(xval_test_objects, file_metadata):
 
 
 # crop sequence length and resize images
-def generate_npy_vision(path, behavior, sequence_length):
+def generate_npy_vision(path, behavior, img_size):
     """
     :param path: path to images folder,
     :return: numpy array with size [SUB_SAMPLE_SIZE, SEQ_LENGTH, ...]
     """
+    # manually crops image sequence to where there is interesting data
     crop_stategy = {
         'crush': [16, -5],
         'grasp': [0, -10],
@@ -164,18 +163,15 @@ def generate_npy_vision(path, behavior, sequence_length):
     }
 
     files = sorted(glob.glob(os.path.join(path, '*.jpg')))
-    img_length = len(files)
     files = files[crop_stategy[behavior][0]:crop_stategy[behavior][1]]
-    imglist = []
+    img_list = []
     for file in files:
-        img = PIL.Image.open(file)
-        img = img.resize(IMG_SIZE)
-        img = np.array(img).transpose([2, 0, 1])[np.newaxis, ...]
-        imglist.append(img)
-    ret = []
-    for i in range(0, len(imglist) - sequence_length, STEP):
-        ret.append(np.concatenate(imglist[i:i + sequence_length], axis=0))
-    return ret, img_length
+        img = Image.open(file)
+        img = img.resize([img_size,img_size])
+        img = np.array(img)
+        img_list.append(img)
+
+    return img_list
 
 
 # create vector encoding descriptors of an object
@@ -188,18 +184,44 @@ def switch_words_on(object, descriptor_codes, descriptors_by_object):
     return encoded_output
 
 
-def compute_behavior(CHOSEN_BEHAVIORS, behavior, object):
-    out_behavior_npys = np.zeros(len(CHOSEN_BEHAVIORS))
-    out_behavior_npys[CHOSEN_BEHAVIORS.index(behavior)] = 1
-    descriptors = switch_words_on(object, DESCRIPTOR_CODES, DESCRIPTORS_BY_OBJECT)
+def compute_behavior(behavior, object):
+    out_behavior_npys = np.zeros(len(cy_meta.BEHAVIORS))
+    out_behavior_npys[cy_meta.BEHAVIORS.index(behavior)] = 1
+    descriptors = switch_words_on(object, cy_meta.DESCRIPTOR_CODES, cy_meta.DESCRIPTORS_BY_OBJECT)
     out_behavior_npys = np.hstack([out_behavior_npys, descriptors])
     return out_behavior_npys
 
+####
+# copies relevant data from directories in partitioned_metadata
+# to the partition_dir, resizing images to image_size
+# and puting sequences_per_file in each tfrecords file
+####
+def copy_data(partitioned_metadata, partition_dir, image_size, sequences_per_file=128):
+    
+    sequence_lengths_file = open(os.path.join(partition_dir, 'sequence_lengths.txt'), 'w')
+    sequences = []
+    actions = []
+    for sequence_i, row_i_and_row in enumerate(partitioned_metadata.iterrows()):
+        row = row_i_and_row[1]
 
-def copy_data(partitioned_metadata, partition_dir, xval_i, args.image_size):
-    out_vision_npys, n_frames = generate_npy_vision(vision, behavior_name, SEQUENCE_LENGTH)
+        # preprocess and store images and their properties
+        frames = generate_npy_vision(str(row["full_path"]), str(row["behavior"]), image_size)
+        sequence_lengths_file.write("%d\n" % len(frames))
+        sequences.append(frames)
 
-    out_behavior_npys = compute_behavior(chosen_behaviors, behavior_name, object_name)
+        # preprocess and store behavior data associated with each sequence of images
+        actions.append(compute_behavior(row["behavior"], row["object"]))
+
+        # actually write to file in batches
+        if ((sequence_i + 1) % sequences_per_file) == 0 or sequence_i >= (partitioned_metadata.shape[0] - 1):
+            num_sequences_to_save = (sequence_i % sequences_per_file) + 1 # all numbers mapped to range [1 sequences_per_file]
+            output_fname = 'sequence_{0}_to_{1}.tfrecords'.format((sequence_i+1)-num_sequences_to_save, sequence_i)
+            output_fname = os.path.join(partition_dir, output_fname)
+            save_tf_record(output_fname, sequences, actions)
+            sequences[:] = []
+            actions[:] = []
+    
+    sequence_lengths_file.close()
 
 
 # processes raw data into tfrecords based on command-line specified args
@@ -218,16 +240,11 @@ def main(args):
     file_metadata = get_metadata(args.input_dir)
     print("done. preview:")
     print(file_metadata.head())
-
-    # remove undesired behaviors
-    for behavior in cy_meta.BEHAVIORS:
-        if behavior not in args.behavior:
-            file_metadata = file_metadata.drop(file_metadata["action"] == behavior, axis=0)
     
-    # 5-fold split to prepare for x-val
+    # 5-fold split to prepare for x-val and remove undesired behaviors
     print("\npartitioning files for cross validation...")
     xval_test_objects = cy_meta.category_split(args.num_folds)
-    partitioned_metadata = partition_data(xval_test_objects, file_metadata)
+    partitioned_metadata = partition_data(xval_test_objects, file_metadata, args.behavior)
     print("done. preview:")
     print(partitioned_metadata.head())
 
@@ -240,7 +257,8 @@ def main(args):
             if not os.path.exists(partition_dir):
                 os.makedirs(partition_dir)
             
-            copy_data(partitioned_metadata, partition_dir, xval_i, args.image_size)
+            this_partition_only = partitioned_metadata[partitioned_metadata[xval_i]==folder]
+            copy_data(this_partition_only, partition_dir, args.image_size)
     
 
 if __name__ == '__main__':
