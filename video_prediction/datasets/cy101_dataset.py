@@ -16,9 +16,13 @@ from video_prediction.datasets import cy101_metadata as cy_meta
 class CY101VideoDataset(VarLenFeatureVideoDataset):
     def __init__(self, *args, **kwargs):
         super(CY101VideoDataset, self).__init__(*args, **kwargs)
-        self.dataset_name = os.path.basename(os.path.split(self.input_dir)[0])
-        self.state_like_names_and_shapes['images'] = 'image_%d', (64, 64, 3)
-        self._check_or_infer_shapes()
+        from google.protobuf.json_format import MessageToDict
+        example = next(tf.python_io.tf_record_iterator(self.filenames[0]))
+        dict_message = MessageToDict(tf.train.Example.FromString(example))
+        feature = dict_message['features']['feature']
+        image_shape = tuple(int(feature[key]['int64List']['value'][0]) for key in ['height', 'width', 'channels'])
+        self.state_like_names_and_shapes['images'] = 'images/encoded', image_shape
+
 
     def get_default_hparams_dict(self):
         default_hparams = super(CY101VideoDataset, self).get_default_hparams_dict()
@@ -31,18 +35,13 @@ class CY101VideoDataset(VarLenFeatureVideoDataset):
         )
         return dict(itertools.chain(default_hparams.items(), hparams.items()))
 
-    def num_examples_per_epoch(self):
-        # extract information from filename to count the number of trajectories in the dataset
-        count = 0
-        for filename in self.filenames:
-            match = re.search('sequence_(\d+)_to_(\d+).tfrecords', os.path.basename(filename))
-            start_traj_iter = int(match.group(1))
-            end_traj_iter = int(match.group(2))
-            count += end_traj_iter - start_traj_iter + 1
 
-        # alternatively, the dataset size can be determined like this, but it's very slow
-        # count = sum(sum(1 for _ in tf.python_io.tf_record_iterator(filename)) for filename in filenames)
-        return count
+    def num_examples_per_epoch(self):
+        with open(os.path.join(self.input_dir, 'sequence_lengths.txt'), 'r') as sequence_lengths_file:
+            sequence_lengths = sequence_lengths_file.readlines()
+        sequence_lengths = [int(sequence_length.strip()) for sequence_length in sequence_lengths]
+        return np.sum(np.array(sequence_lengths) >= self.hparams.sequence_length)
+
 
     @property
     def jpeg_encoding(self):
