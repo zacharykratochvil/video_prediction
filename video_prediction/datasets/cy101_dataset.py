@@ -45,7 +45,7 @@ class CY101VideoDataset(VarLenFeatureVideoDataset):
 
     @property
     def jpeg_encoding(self):
-        return True
+        return False
 
 
 ##############
