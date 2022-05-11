@@ -122,6 +122,17 @@ def main():
         print(k, "=", v)
     print('------------------------------------- End --------------------------------------')
 
+
+    ##### DEBUGGING CODE ######
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_mem_frac)
+    config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
+    sess =  tf.Session(config=config)
+    from tensorflow.python import debug as tf_debug
+    sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+    sess.run()
+    ###########################
+
+
     VideoDataset = datasets.get_dataset_class(args.dataset)
     train_dataset = VideoDataset(
         args.input_dir,
@@ -217,10 +228,6 @@ def main():
     max_steps = model.hparams.max_steps
 
 
-    ##### DEBUGGING CODE ######
-    from tensorflow.python import debug as tf_debug
-    sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-    ###########################
     
     #with tf.Session(config=config) as sess:
     if True:
