@@ -215,7 +215,15 @@ def main():
     config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
     global_step = tf.train.get_or_create_global_step()
     max_steps = model.hparams.max_steps
-    with tf.Session(config=config) as sess:
+
+
+    ##### DEBUGGING CODE ######
+    from tensorflow.python import debug as tf_debug
+    sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+    ###########################
+    
+    #with tf.Session(config=config) as sess:
+    if True:
         print("parameter_count =", sess.run(parameter_count))
 
         sess.run(tf.global_variables_initializer())
