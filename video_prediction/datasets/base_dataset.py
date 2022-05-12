@@ -437,11 +437,13 @@ class VarLenFeatureVideoDataset(BaseVideoDataset):
                 seq = tf.sparse_tensor_to_dense(features[name], '')
             else:
                 seq = tf.sparse_tensor_to_dense(features[name])
-                seq = tf.reshape(seq, [example_sequence_length] + list(shape))
+                seq_shape = tf.stack(values=[example_sequence_length - 1, int(shape[0])], axis=0)
+                seq = tf.reshape(seq, seq_shape)
             state_like_seqs[example_name] = seq
         for example_name, (name, shape) in self.action_like_names_and_shapes.items():
             seq = tf.sparse_tensor_to_dense(features[name])
-            seq = tf.reshape(seq, [example_sequence_length - 1] + list(shape))
+            seq_shape = tf.stack(values=[example_sequence_length - 1, int(shape[0])], axis=0)
+            seq = tf.reshape(seq, seq_shape)
             action_like_seqs[example_name] = seq
 
         state_like_seqs, action_like_seqs = \
