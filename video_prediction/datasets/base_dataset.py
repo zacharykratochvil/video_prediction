@@ -11,7 +11,7 @@ from tensorflow.contrib.training import HParams
 
 class BaseVideoDataset(object):
     def __init__(self, input_dir, mode='train', num_epochs=None, seed=None,
-                 hparams_dict=None, hparams=None):
+                 hparams_dict=None, hparams=None, session=None):
         """
         Args:
             input_dir: either a directory containing subdirectories train,
@@ -32,6 +32,7 @@ class BaseVideoDataset(object):
         self.mode = mode
         self.num_epochs = num_epochs
         self.seed = seed
+        self.session = session
 
         if self.mode not in ('train', 'val', 'test'):
             raise ValueError('Invalid mode %s' % self.mode)
@@ -139,6 +140,11 @@ class BaseVideoDataset(object):
         else:
             dataset = dataset.repeat(self.num_epochs)
 
+        #iter = dataset.take(1).make_one_shot_iterator()
+        #tensors = self.parser(iter.get_next())
+        #with tf.Session(graph=tensors.graph).as_default() as sess:
+        #    print(tensors.eval())
+
         def _parser(serialized_example):
             state_like_seqs, action_like_seqs = self.parser(serialized_example)
             seqs = OrderedDict(list(state_like_seqs.items()) + list(action_like_seqs.items()))
@@ -242,6 +248,7 @@ class VideoDataset(BaseVideoDataset):
         super(VideoDataset, self).__init__(*args, **kwargs)
         self._max_sequence_length = None
         self._dict_message = None
+        print("I made a dataset.")
 
     def _check_or_infer_shapes(self):
         """
@@ -342,6 +349,7 @@ class VideoDataset(BaseVideoDataset):
                 state_like_seqs[example_name].append(features[name % i])
         for i in range(self._max_sequence_length - 1):
             for example_name, (name, shape) in self.action_like_names_and_shapes.items():
+
                 action_like_seqs[example_name].append(features[name % i])
 
         # for this class, it's much faster to decode and preprocess the entire sequence before sampling a slice
@@ -439,10 +447,21 @@ class VarLenFeatureVideoDataset(BaseVideoDataset):
                 seq = tf.sparse_tensor_to_dense(features[name])
                 seq = tf.reshape(seq, [example_sequence_length] + list(shape))
             state_like_seqs[example_name] = seq
+        #print(f"am I using state/action? {self.hparams.use_state}")
         for example_name, (name, shape) in self.action_like_names_and_shapes.items():
             seq = tf.sparse_tensor_to_dense(features[name])
-            seq = tf.reshape(seq, [example_sequence_length - 1] + list(shape))
-            action_like_seqs[example_name] = seq
+         #   print("I'm alive!")
+          #  print([example_sequence_length - 1] + list(shape))
+            new_shape = tf.stack(values=[example_sequence_length - 1, int(shape[0])], axis=0)
+           # print(new_shape)
+            seq = tf.reshape(seq, new_shape)
+            break
+        #with tf.Session(graph=serialized_example.graph).as_default() as sess:
+        #    print(seq.eval())
+        #return
+
+        
+        action_like_seqs[example_name] = seq
 
         state_like_seqs, action_like_seqs = \
             self.slice_sequences(state_like_seqs, action_like_seqs, example_sequence_length)

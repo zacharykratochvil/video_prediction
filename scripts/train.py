@@ -123,15 +123,29 @@ def main():
     print('------------------------------------- End --------------------------------------')
 
 
+    '''
     ##### DEBUGGING CODE ######
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_mem_frac)
     config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
     sess =  tf.Session(config=config)
-    from tensorflow.python import debug as tf_debug
-    sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-    sess.run()
-    ###########################
+    #sess.as_default()
+    #from tensorflow.python import debug as tf_debug
+    #sess = tf_debug.LocalCLIDebugWrapperSession(sess, dump_root="C:\\Users\\Zach\\Documents\\Sinapov Lab Research\\tfdbg_dump")
+    #sess.add_tensor_filter("is_float32", lambda datum, tensor: tensor.dtype == tf.float32)
+    #sess.add_tensor_filter("is_string", lambda datum, tensor: tensor.dtype == tf.string)
 
+    def make_dump_dir():
+        if os.path.exists("C:\\Users\\Zach\\Documents\\Sinapov Lab Research\\tfdbg_dump"):
+            os.rmdir("C:\\Users\\Zach\\Documents\\Sinapov Lab Research\\tfdbg_dump")
+        os.mkdir("C:\\Users\\Zach\\Documents\\Sinapov Lab Research\\tfdbg_dump")
+
+    make_dump_dir()
+    #sess.run(tf.global_variables_initializer())
+    make_dump_dir()
+    #sess.run(tf.local_variables_initializer())
+    make_dump_dir()
+    ###########################
+    '''
 
     VideoDataset = datasets.get_dataset_class(args.dataset)
     train_dataset = VideoDataset(
@@ -171,7 +185,9 @@ def main():
         aggregate_nccl=args.aggregate_nccl)
 
     batch_size = model.hparams.batch_size
+    print(batch_size)
     train_tf_dataset = train_dataset.make_dataset(batch_size)
+    print(train_tf_dataset)
     train_iterator = train_tf_dataset.make_one_shot_iterator()
     train_handle = train_iterator.string_handle()
     val_tf_dataset = val_dataset.make_dataset(batch_size)
@@ -228,9 +244,8 @@ def main():
     max_steps = model.hparams.max_steps
 
 
-    
-    #with tf.Session(config=config) as sess:
-    if True:
+    #if True:
+    with tf.Session(config=config) as sess:
         print("parameter_count =", sess.run(parameter_count))
 
         sess.run(tf.global_variables_initializer())
