@@ -2,7 +2,6 @@ import argparse
 import glob
 import itertools
 import os
-import re
 
 import numpy as np
 import tensorflow as tf
@@ -22,6 +21,10 @@ class CY101VideoDataset(VarLenFeatureVideoDataset):
         feature = dict_message['features']['feature']
         image_shape = tuple(int(feature[key]['int64List']['value'][0]) for key in ['height', 'width', 'channels'])
         self.state_like_names_and_shapes['images'] = 'images/encoded', image_shape
+        if self.hparams.use_state:
+            #self.state_like_names_and_shapes['states'] = '%d/endeffector_pos', (3,)
+            num_actions = feature["num_actions"]['int64List']['value'][0]
+            self.action_like_names_and_shapes['actions'] = 'actions', (num_actions,)
 
 
     def get_default_hparams_dict(self):
@@ -30,8 +33,7 @@ class CY101VideoDataset(VarLenFeatureVideoDataset):
             context_frames=4,
             sequence_length=20,
             force_time_shift=True,
-            shuffle_on_val=True,
-            use_state=False,
+            shuffle_on_val=True
         )
         return dict(itertools.chain(default_hparams.items(), hparams.items()))
 
@@ -54,28 +56,32 @@ class CY101VideoDataset(VarLenFeatureVideoDataset):
 def _bytes_list_feature(values):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=values))
 
-def _int64_feature(value):
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+def _int64_list_feature(value):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+
+def _float_list_feature(value):
+    return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
 #####
 # takes an output file name, list of sequences of images, and list of actions
 # saves as tfrecord file
 #####
-def save_tf_record(output_fname, sequences, actions):
+def save_tf_record(output_fname, sequences, actions_by_sequence):
     print('saving sequences to %s' % output_fname)
     with tf.python_io.TFRecordWriter(output_fname) as writer:
-        for sequence, action in zip(sequences, actions):
+        for sequence, actions in zip(sequences, actions_by_sequence):
             num_frames = len(sequence)
             height, width, channels = sequence[0].shape
-            encoded_sequence = [bytes(image) for image in sequence]
-            encoded_action = [bytes(action.tostring())]
+            encoded_sequence = [bytes(image.tostring()) for image in sequence]
+            encoded_actions = [float(action) for action in actions]
             features = tf.train.Features(feature={
-                'sequence_length': _int64_feature(num_frames),
-                'height': _int64_feature(height),
-                'width': _int64_feature(width),
-                'channels': _int64_feature(channels),
+                'sequence_length': _int64_list_feature([num_frames]),
+                'height': _int64_list_feature([height]),
+                'width': _int64_list_feature([width]),
+                'channels': _int64_list_feature([channels]),
                 'images/encoded': _bytes_list_feature(encoded_sequence),
-                'action': _bytes_list_feature(encoded_action)
+                'num_actions': _int64_list_feature([len(actions)]),
+                'actions': _float_list_feature(encoded_actions)
             })
             example = tf.train.Example(features=features)
             writer.write(example.SerializeToString())
@@ -188,7 +194,7 @@ def compute_behavior(behavior, object):
     out_behavior_npys[cy_meta.BEHAVIORS.index(behavior)] = 1
     descriptors = switch_words_on(object, cy_meta.DESCRIPTOR_CODES, cy_meta.DESCRIPTORS_BY_OBJECT)
     out_behavior_npys = np.hstack([out_behavior_npys, descriptors])
-    return out_behavior_npys
+    return np.array(out_behavior_npys)
 
 ####
 # copies relevant data from directories in partitioned_metadata
@@ -229,6 +235,8 @@ def main(args):
     if len(args.behavior) == 0:
         args.behavior = cy_meta.BEHAVIORS
     else:
+        print(args.behavior)
+        args.behavior = args.behavior[0]
         for name in args.behavior:
             if name not in cy_meta.BEHAVIORS:
                 raise Exception(f"{name} not a behavior in the cy101 dataset. " +
